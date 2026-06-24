@@ -1,8 +1,19 @@
-// ignore_for_file: deprecated_member_use
+// ignore_for_file: use_build_context_synchronously, deprecated_member_use
 
 import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'firebase_options.dart';
+// ignore: unused_import
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
-void main() => runApp(const MyApp());
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+  runApp(const MyApp());
+}
 
 const Color mainColor = Color(0xFF20B8B3);
 const Color bgColor = Color(0xFFEAFBFF);
@@ -10,9 +21,10 @@ const Color darkText = Color(0xFF102A43);
 const Color medicalBlue = Color(0xFF4A90E2);
 const Color softPink = Color(0xFFFFD6E7);
 const Color softYellow = Color(0xFFFFE8A3);
-const Color successColor = Color(0xFF27AE60);
-const Color warningColor = Color(0xFFF39C12);
+const Color successColor = Color(0xFF2ECC71);
+const Color warningColor = Color(0xFFFF9800);
 const Color dangerColor = Color(0xFFE74C3C);
+
 
 const String babyImage = "assets/baby.png";
 
@@ -440,8 +452,80 @@ class RoleScreen extends StatelessWidget {
   } 
   /* ===================== LOGIN SCREEN ===================== */
 
-class LoginScreen extends StatelessWidget {
+class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
+
+  @override
+  State<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
+  final emailController = TextEditingController();
+  final passwordController = TextEditingController();
+
+  Future<void> login() async {
+
+  final userResult = await FirebaseFirestore.instance
+      .collection('users')
+      .where('email', isEqualTo: emailController.text.trim())
+      .where('password', isEqualTo: passwordController.text.trim())
+      .get();
+
+  if (userResult.docs.isNotEmpty) {
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const MainNavigationScreen(),
+      ),
+    );
+    return;
+  }
+
+  final doctorResult = await FirebaseFirestore.instance
+      .collection('doctors')
+      .where('email', isEqualTo: emailController.text.trim())
+      .get();
+
+  if (doctorResult.docs.isNotEmpty) {
+    final doctor = doctorResult.docs.first.data();
+
+    if (doctor['approved'] == true) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => const DoctorDashboardScreen(),
+        ),
+      );
+    } else {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => const PendingApprovalScreen(),
+        ),
+      );
+    }
+    return;
+  }
+
+  ScaffoldMessenger.of(context).showSnackBar(
+    const SnackBar(
+      content: Text("Wrong email or password"),
+    ),
+  );
+}
+
+  Future<void> register() async {
+  await FirebaseFirestore.instance.collection('users').add({
+    'email': emailController.text.trim(),
+    'password': passwordController.text.trim(),
+    'role': 'mother',
+    'createdAt': DateTime.now(),
+  });
+
+  ScaffoldMessenger.of(context).showSnackBar(
+    const SnackBar(content: Text("Account saved successfully")),
+  );
+}
 
   @override
   Widget build(BuildContext context) {
@@ -453,11 +537,7 @@ class LoginScreen extends StatelessWidget {
             child: Column(
               children: [
                 backButton(context),
-                const Icon(
-                  Icons.health_and_safety,
-                  size: 85,
-                  color: mainColor,
-                ),
+                const Icon(Icons.health_and_safety, size: 85, color: mainColor),
                 const SizedBox(height: 12),
                 const Text(
                   "Welcome Back!",
@@ -483,31 +563,21 @@ class LoginScreen extends StatelessWidget {
                     child: Column(
                       children: [
                         TextField(
-                          decoration: inputField(
-                            "Username",
-                            Icons.person_outline,
-                          ),
+                          controller: emailController,
+                          decoration: inputField("Email", Icons.email),
                         ),
                         const SizedBox(height: 15),
                         TextField(
+                          controller: passwordController,
                           obscureText: true,
-                          decoration: inputField(
-                            "Password",
-                            Icons.lock_outline,
-                          ),
+                          decoration: inputField("Password", Icons.lock_outline),
                         ),
                         const SizedBox(height: 25),
-                        mainButton(
-                          "Login",
-                          Icons.login,
-                          () {
-                            Navigator.pushReplacement(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => const MainNavigationScreen(),
-                              ),
-                            );
-                          },
+                        mainButton("Login", Icons.login, login),
+                        const SizedBox(height: 12),
+                        TextButton(
+                          onPressed: register,
+                          child: const Text("Create New Account"),
                         ),
                       ],
                     ),
@@ -1451,92 +1521,52 @@ class ConsultationScreen extends StatefulWidget {
 
 class _ConsultationScreenState extends State<ConsultationScreen> {
   final TextEditingController messageController = TextEditingController();
+  
 
-  final List<ChatMessage> messages = [
-    ChatMessage(
-      sender: "Mother",
-      message: "My baby has been crying for 3 hours.",
-      isDoctor: false,
-    ),
-    ChatMessage(
-      sender: "Doctor",
-      message: "Please check temperature and feeding time.",
-      isDoctor: true,
-    ),
-    ChatMessage(
-      sender: "Mother",
-      message: "Temperature is 37.8°C after feeding.",
-      isDoctor: false,
-    ),
-    ChatMessage(
-      sender: "Doctor",
-      message: "Monitor him for 30 minutes and keep him hydrated.",
-      isDoctor: true,
-    ),
-  ];
+   Future<void> sendMessage({required bool isDoctor}) async {
+  if (messageController.text.trim().isEmpty) return;
 
-  void sendMessage() {
-    if (messageController.text.trim().isEmpty) return;
+  await FirebaseFirestore.instance
+      .collection('chat_rooms')
+      .doc('room_general')
+      .collection('messages')
+      .add({
+    'sender': isDoctor ? 'Doctor' : 'Mother',
+    'message': messageController.text.trim(),
+    'isDoctor': isDoctor,
+    'createdAt': FieldValue.serverTimestamp(),
+  });
 
-    setState(() {
-      messages.add(
-        ChatMessage(
-          sender: "Mother",
-          message: messageController.text.trim(),
-          isDoctor: false,
-        ),
-      );
+  messageController.clear();
+}
+  Widget chatBubble(Map<String, dynamic> msg) {
+    final bool isDoctor = msg['isDoctor'] == true;
 
-      messages.add(
-        ChatMessage(
-          sender: "Doctor",
-          message:
-              "Thanks for the update. I will review the symptoms and reply soon.",
-          isDoctor: true,
-        ),
-      );
-    });
-
-    messageController.clear();
-  }
-
-  Widget chatBubble(ChatMessage msg) {
     return Align(
-      alignment: msg.isDoctor ? Alignment.centerLeft : Alignment.centerRight,
+      alignment: isDoctor ? Alignment.centerLeft : Alignment.centerRight,
       child: Container(
         margin: const EdgeInsets.only(bottom: 10),
         padding: const EdgeInsets.all(14),
         constraints: const BoxConstraints(maxWidth: 290),
         decoration: BoxDecoration(
-          color: msg.isDoctor ? Colors.white : mainColor,
-          borderRadius: BorderRadius.only(
-            topLeft: const Radius.circular(18),
-            topRight: const Radius.circular(18),
-            bottomLeft: Radius.circular(msg.isDoctor ? 4 : 18),
-            bottomRight: Radius.circular(msg.isDoctor ? 18 : 4),
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(.05),
-              blurRadius: 8,
-            ),
-          ],
+          color: isDoctor ? Colors.white : mainColor,
+          borderRadius: BorderRadius.circular(18),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              msg.sender,
+              msg['sender'] ?? '',
               style: TextStyle(
                 fontWeight: FontWeight.bold,
-                color: msg.isDoctor ? darkText : Colors.white,
+                color: isDoctor ? darkText : Colors.white,
               ),
             ),
             const SizedBox(height: 5),
             Text(
-              msg.message,
+              msg['message'] ?? '',
               style: TextStyle(
-                color: msg.isDoctor ? Colors.black87 : Colors.white,
+                color: isDoctor ? Colors.black87 : Colors.white,
               ),
             ),
           ],
@@ -1567,7 +1597,7 @@ class _ConsultationScreenState extends State<ConsultationScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          "Dr. Ahmed Mohamed",
+                          "Doctor Chat",
                           style: TextStyle(
                             fontSize: 20,
                             fontWeight: FontWeight.bold,
@@ -1586,10 +1616,27 @@ class _ConsultationScreenState extends State<ConsultationScreen> {
               ),
               const SizedBox(height: 15),
               Expanded(
-                child: ListView.builder(
-                  itemCount: messages.length,
-                  itemBuilder: (context, index) {
-                    return chatBubble(messages[index]);
+                child: StreamBuilder<QuerySnapshot>(
+                  stream: FirebaseFirestore.instance
+                      .collection('chat_rooms')
+                      .doc('room_general')
+                      .collection('messages')
+                      .snapshots(),
+                  builder: (context, snapshot) {
+                    if (!snapshot.hasData) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+
+                    final messages = snapshot.data!.docs;
+
+                    return ListView.builder(
+                      itemCount: messages.length,
+                      itemBuilder: (context, index) {
+                        final data =
+                            messages[index].data() as Map<String, dynamic>;
+                        return chatBubble(data);
+                      },
+                    );
                   },
                 ),
               ),
@@ -1605,13 +1652,16 @@ class _ConsultationScreenState extends State<ConsultationScreen> {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  CircleAvatar(
-                    backgroundColor: mainColor,
-                    child: IconButton(
-                      icon: const Icon(Icons.send, color: Colors.white),
-                      onPressed: sendMessage,
-                    ),
-                  ),
+
+IconButton(
+  icon: const Icon(Icons.send),
+  onPressed: () => sendMessage(isDoctor: false),
+),
+
+IconButton(
+  icon: const Icon(Icons.medical_services),
+  onPressed: () => sendMessage(isDoctor: true),
+),
                 ],
               ),
             ],
@@ -1872,8 +1922,37 @@ class MedicalReportScreen extends StatelessWidget {
 }
 /* ===================== DOCTOR REGISTER SCREEN ===================== */
 
-class DoctorRegisterScreen extends StatelessWidget {
+class DoctorRegisterScreen extends StatefulWidget {
   const DoctorRegisterScreen({super.key});
+
+  @override
+  State<DoctorRegisterScreen> createState() => _DoctorRegisterScreenState();
+}
+
+class _DoctorRegisterScreenState extends State<DoctorRegisterScreen> {
+  final nameController = TextEditingController();
+  final emailController = TextEditingController();
+  final specializationController = TextEditingController();
+  final licenseController = TextEditingController();
+  final experienceController = TextEditingController();
+
+  Future<void> submitDoctor() async {
+    await FirebaseFirestore.instance.collection('doctors').add({
+      'name': nameController.text.trim(),
+      'email': emailController.text.trim(),
+      'specialization': specializationController.text.trim(),
+      'licenseId': licenseController.text.trim(),
+      'experience': experienceController.text.trim(),
+      'certificate': 'Uploaded',
+      'approved': false,
+      'createdAt': DateTime.now(),
+    });
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const PendingApprovalScreen()),
+    );
+  }
 
   Widget uploadCertificateBox() {
     return Container(
@@ -1931,41 +2010,36 @@ class DoctorRegisterScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 20),
                   TextField(
+                    controller: nameController,
                     decoration: inputField("Doctor Full Name", Icons.person),
                   ),
                   const SizedBox(height: 12),
                   TextField(
+                    controller: emailController,
                     decoration: inputField("Email", Icons.email),
                   ),
                   const SizedBox(height: 12),
                   TextField(
-                    decoration: inputField(
-                      "Specialization",
-                      Icons.medical_services,
-                    ),
+                    controller: specializationController,
+                    decoration: inputField("Specialization", Icons.medical_services),
                   ),
                   const SizedBox(height: 12),
                   TextField(
+                    controller: licenseController,
                     decoration: inputField("Medical License ID", Icons.badge),
                   ),
                   const SizedBox(height: 12),
                   uploadCertificateBox(),
                   const SizedBox(height: 12),
                   TextField(
+                    controller: experienceController,
                     decoration: inputField("Years of Experience", Icons.work),
                   ),
                   const SizedBox(height: 20),
                   mainButton(
                     "Submit for Admin Approval",
                     Icons.upload,
-                    () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const PendingApprovalScreen(),
-                        ),
-                      );
-                    },
+                    submitDoctor,
                   ),
                 ],
               ),
@@ -1976,7 +2050,6 @@ class DoctorRegisterScreen extends StatelessWidget {
     );
   }
 }
-
 /* ===================== PENDING APPROVAL SCREEN ===================== */
 
 class PendingApprovalScreen extends StatelessWidget {
@@ -2028,7 +2101,9 @@ class PendingApprovalScreen extends StatelessWidget {
 class AdminScreen extends StatelessWidget {
   const AdminScreen({super.key});
 
-  Widget doctorRequest(BuildContext context, String name, String license) {
+  Widget doctorRequest(BuildContext context, QueryDocumentSnapshot doctor) {
+    final data = doctor.data() as Map<String, dynamic>;
+
     return Card(
       elevation: 5,
       margin: const EdgeInsets.only(bottom: 15),
@@ -2040,10 +2115,14 @@ class AdminScreen extends StatelessWidget {
             ListTile(
               leading: const Icon(Icons.medical_services, color: mainColor),
               title: Text(
-                name,
+                data['name'] ?? 'No Name',
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
-              subtitle: Text("License: $license\nCertificate: Uploaded"),
+              subtitle: Text(
+                "License: ${data['licenseId'] ?? 'No License'}\n"
+                "Specialization: ${data['specialization'] ?? 'No specialization'}\n"
+                "Certificate: ${data['certificate'] ?? 'Uploaded'}",
+              ),
               trailing: TextButton(
                 onPressed: () {},
                 child: const Text("View Cert."),
@@ -2053,12 +2132,14 @@ class AdminScreen extends StatelessWidget {
               children: [
                 Expanded(
                   child: ElevatedButton(
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const DoctorDashboardScreen(),
-                        ),
+                    onPressed: () async {
+                      await FirebaseFirestore.instance
+                          .collection('doctors')
+                          .doc(doctor.id)
+                          .update({'approved': true});
+
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text("Doctor approved")),
                       );
                     },
                     style: ElevatedButton.styleFrom(
@@ -2073,7 +2154,16 @@ class AdminScreen extends StatelessWidget {
                 const SizedBox(width: 12),
                 Expanded(
                   child: ElevatedButton(
-                    onPressed: () {},
+                    onPressed: () async {
+                      await FirebaseFirestore.instance
+                          .collection('doctors')
+                          .doc(doctor.id)
+                          .delete();
+
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text("Doctor rejected")),
+                      );
+                    },
                     style: ElevatedButton.styleFrom(
                       backgroundColor: dangerColor,
                     ),
@@ -2084,8 +2174,35 @@ class AdminScreen extends StatelessWidget {
                   ),
                 ),
               ],
-            )
+            ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget smallStatCard(String count, String title, IconData icon, Color color) {
+    return Expanded(
+      child: Card(
+        elevation: 5,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            children: [
+              Icon(icon, color: color),
+              const SizedBox(height: 6),
+              Text(
+                count,
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: color,
+                  fontSize: 18,
+                ),
+              ),
+              Text(title),
+            ],
+          ),
         ),
       ),
     );
@@ -2095,52 +2212,75 @@ class AdminScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       body: BabyBg(
-        child: ListView(
-          padding: const EdgeInsets.all(25),
-          children: [
-            backButton(context),
-            const Icon(
-              Icons.admin_panel_settings,
-              size: 80,
-              color: mainColor,
-            ),
-            const SizedBox(height: 15),
-            const Text(
-              "Admin Dashboard",
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 26,
-                fontWeight: FontWeight.bold,
-                color: darkText,
-              ),
-            ),
-            const SizedBox(height: 20),
-            Row(
+        child: StreamBuilder<QuerySnapshot>(
+          stream: FirebaseFirestore.instance
+              .collection('doctors')
+              .where('approved', isEqualTo: false)
+              .snapshots(),
+          builder: (context, snapshot) {
+            if (!snapshot.hasData) {
+              return const Center(child: CircularProgressIndicator());
+            }
+
+            final pendingDoctors = snapshot.data!.docs;
+
+            return ListView(
+              padding: const EdgeInsets.all(25),
               children: [
-                smallStatCard(
-                  "2",
-                  "Pending",
-                  Icons.pending_actions,
-                  warningColor,
+                backButton(context),
+                const Icon(
+                  Icons.admin_panel_settings,
+                  size: 80,
+                  color: mainColor,
                 ),
-                smallStatCard(
-                  "5",
-                  "Approved",
-                  Icons.verified,
-                  successColor,
+                const SizedBox(height: 15),
+                const Text(
+                  "Admin Dashboard",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 26,
+                    fontWeight: FontWeight.bold,
+                    color: darkText,
+                  ),
                 ),
-                smallStatCard(
-                  "1",
-                  "Rejected",
-                  Icons.cancel,
-                  dangerColor,
+                const SizedBox(height: 20),
+                Row(
+                  children: [
+                    smallStatCard(
+                      pendingDoctors.length.toString(),
+                      "Pending",
+                      Icons.pending_actions,
+                      warningColor,
+                    ),
+                    smallStatCard(
+                      "0",
+                      "Approved",
+                      Icons.verified,
+                      successColor,
+                    ),
+                    smallStatCard(
+                      "0",
+                      "Rejected",
+                      Icons.cancel,
+                      dangerColor,
+                    ),
+                  ],
                 ),
+                const SizedBox(height: 15),
+                if (pendingDoctors.isEmpty)
+                  const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(30),
+                      child: Text("No pending doctors"),
+                    ),
+                  ),
+                ...pendingDoctors.map((doctor) {
+                  return doctorRequest(context, doctor);
+                // ignore: unnecessary_to_list_in_spreads
+                }).toList(),
               ],
-            ),
-            const SizedBox(height: 15),
-            doctorRequest(context, "Dr. Ahmed Mohamed", "DOC-2026-112"),
-            doctorRequest(context, "Dr. Sara Ali", "DOC-2026-205"),
-          ],
+            );
+          },
         ),
       ),
     );
@@ -2154,6 +2294,7 @@ class DoctorDashboardScreen extends StatelessWidget {
 
   Widget doctorReplyBox() {
     return Card(
+  
       elevation: 5,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
       child: Padding(
