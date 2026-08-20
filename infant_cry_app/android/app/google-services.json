@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "737481509538",
+    "project_id": "pediatric-cry-care",
+    "storage_bucket": "pediatric-cry-care.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:737481509538:android:c5fe4e1a759db8bac665fb",
+        "android_client_info": {
+          "package_name": "com.example.infant_cry_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBIZ_lD7jhnpZgmCT6mPxuLVu2z4MY-vYI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -1,4 +1,5 @@
-// ignore_for_file: use_build_context_synchronously, deprecated_member_use
+// ignore_for_file: deprecated_member_use, use_build_context_synchronously, non_constant_identifier_names, strict_top_level_inference, prefer_typing_uninitialized_variables
+
 
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -838,7 +839,7 @@ class HomeScreen extends StatelessWidget {
                     );
                   },
                 ),
-              ],
+                ],
             ),
             const Text(
               "Let's take care of your baby",
