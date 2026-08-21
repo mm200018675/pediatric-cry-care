@@ -1,4 +1,4 @@
-// ignore_for_file: curly_braces_in_flow_control_structures, avoid_web_libraries_in_flutter, unused_local_variable, use_build_context_synchronously, deprecated_member_use
+// ignore_for_file: unnecessary_underscores, unused_import, curly_braces_in_flow_control_structures, avoid_web_libraries_in_flutter, unused_local_variable, use_build_context_synchronously, deprecated_member_use
 
 import 'dart:html' as html;
 import 'dart:async';
@@ -137,6 +137,105 @@ TextStyle premiumBody3D({
 
 const String babyImage = "assets/baby.png";
 const String doctorImage = "assets/baby doctor.webp";
+
+/// Opens the browser file picker and returns a small data URL for demo storage.
+/// This keeps the existing Firebase structure and requires no new backend service.
+// ADDED: Compress profile images before sending them to Firestore.
+// Firestore has a per-field size limit, so this keeps image data small and reliable.
+Future<String> compressImageDataUrl(String dataUrl) async {
+  try {
+    final image = html.ImageElement(src: dataUrl);
+    await image.onLoad.first;
+    final sourceWidth = image.naturalWidth;
+    final sourceHeight = image.naturalHeight;
+    if (sourceWidth <= 0 || sourceHeight <= 0) return dataUrl;
+    const maxSide = 640;
+    final scale = math.min(1.0, maxSide / math.max(sourceWidth, sourceHeight));
+    final canvasWidth = math.max(1, (sourceWidth * scale).round());
+    final canvasHeight = math.max(1, (sourceHeight * scale).round());
+    final canvas = html.CanvasElement(
+      width: canvasWidth,
+      height: canvasHeight,
+    );
+    final ctx = canvas.context2D;
+    ctx.drawImageScaled(image, 0, 0, canvasWidth, canvasHeight);
+    return canvas.toDataUrl('image/jpeg', 0.68);
+  } catch (_) {
+    return dataUrl;
+  }
+}
+
+Future<Map<String, String>?> pickBrowserFile({
+  required String accept,
+}) async {
+  final input = html.FileUploadInputElement()..accept = accept;
+  input.click();
+  await input.onChange.first;
+
+  final file = input.files?.isNotEmpty == true ? input.files!.first : null;
+  if (file == null) return null;
+
+  final reader = html.FileReader();
+  reader.readAsDataUrl(file);
+  await reader.onLoad.first;
+
+  var dataUrl = reader.result;
+  if (dataUrl is! String) return null;
+  if (accept.startsWith('image/')) {
+    dataUrl = await compressImageDataUrl(dataUrl);
+  }
+  return {
+    'name': file.name,
+    'dataUrl': dataUrl,
+  };
+}
+
+Widget dataCircleImage({
+  required String? dataUrl,
+  required String fallbackAsset,
+  required IconData fallbackIcon,
+  double size = 130,
+}) {
+  return Container(
+    width: size,
+    height: size,
+    decoration: BoxDecoration(
+      shape: BoxShape.circle,
+      border: Border.all(color: mainColor, width: 4),
+      boxShadow: [
+        BoxShadow(
+          color: mainColor.withOpacity(.18),
+          blurRadius: 18,
+          offset: const Offset(0, 8),
+        ),
+      ],
+    ),
+    child: ClipOval(
+      child: dataUrl != null
+          ? Image.network(
+              dataUrl,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => Icon(
+                fallbackIcon,
+                color: mainColor,
+                size: size * .45,
+              ),
+            )
+          : Image.asset(
+              fallbackAsset,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => ColoredBox(
+                color: const Color(0xFFE7FAF9),
+                child: Icon(
+                  fallbackIcon,
+                  color: mainColor,
+                  size: size * .45,
+                ),
+              ),
+            ),
+    ),
+  );
+}
 
 class ChatMessage {
   final String sender;
@@ -1792,6 +1891,8 @@ class RoleScreen extends StatelessWidget {
 }
 
 /* ===================== LOGIN SCREEN ===================== */
+// UPDATED: Login supports password visibility and Enter-key submission.
+// Existing accounts do not show a profile-image picker; images are selected during registration only.
 
 class LoginScreen extends StatefulWidget {
   final String expectedRole;
@@ -1806,9 +1907,58 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
+  bool showPassword = false;
   final emailController = TextEditingController();
   final passwordController = TextEditingController();
+  String? motherProfileImageDataUrl;
+  String? motherProfileImageName;
   bool loading = false;
+
+  Future<void> chooseMotherProfileImage() async {
+    final picked = await pickBrowserFile(accept: 'image/*');
+    if (!mounted || picked == null) return;
+    setState(() {
+      motherProfileImageDataUrl = picked['dataUrl'];
+      motherProfileImageName = picked['name'];
+    });
+  }
+
+  Widget motherProfilePicker() {
+    return InkWell(
+      onTap: loading ? null : chooseMotherProfileImage,
+      borderRadius: BorderRadius.circular(18),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF6F8FC),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: mainColor.withOpacity(.25)),
+        ),
+        child: Row(
+          children: [
+            dataCircleImage(
+              dataUrl: motherProfileImageDataUrl,
+              fallbackAsset: babyImage,
+              fallbackIcon: Icons.person,
+              size: 54,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                motherProfileImageName ?? 'Add Profile Picture (Optional)',
+                style: const TextStyle(
+                  color: darkText,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            const Icon(Icons.photo_camera_outlined, color: mainColor),
+          ],
+        ),
+      ),
+    );
+  }
 
   Future<DocumentSnapshot<Map<String, dynamic>>?> _findDoctorProfile(
     String uid,
@@ -2022,6 +2172,8 @@ class _LoginScreenState extends State<LoginScreen> {
           .set({
         'email': email,
         'role': 'mother',
+        'profileImage': motherProfileImageDataUrl,
+        'profileImageName': motherProfileImageName,
         'createdAt': FieldValue.serverTimestamp(),
       });
 
@@ -2182,13 +2334,22 @@ class _LoginScreenState extends State<LoginScreen> {
                                 const SizedBox(height: 13),
                                 TextField(
                                   controller: passwordController,
-                                  obscureText: true,
+                                  obscureText: !showPassword,
+                                  onSubmitted: (_) => login(),
                                   decoration: inputField(
                                     "Password",
                                     Icons.lock_outline_rounded,
+                                  ).copyWith(
+                                    suffixIcon: IconButton(
+                                      icon: Icon(showPassword ? Icons.visibility_off : Icons.visibility),
+                                      onPressed: () => setState(() => showPassword = !showPassword),
+                                    ),
                                   ),
                                 ),
                                 const SizedBox(height: 20),
+                                if (widget.expectedRole == 'mother') ...[
+                                  const SizedBox(height: 14),
+                                ],
                                 mainButton(
                                   "Login to Dashboard",
                                   Icons.login_rounded,
@@ -2199,7 +2360,14 @@ class _LoginScreenState extends State<LoginScreen> {
                                   SizedBox(
                                     width: double.infinity,
                                     child: OutlinedButton.icon(
-                                      onPressed: register,
+                                      onPressed: () {
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (_) => const MotherRegistrationScreen(),
+                                          ),
+                                        );
+                                      },
                                       icon: const Icon(
                                         Icons.person_add_alt_1_rounded,
                                         color: mainColor,
@@ -2271,8 +2439,236 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 }
 
+
+/* ===================== MOTHER REGISTRATION ===================== */
+
+// ADDED: Separate account-creation screen for mothers.
+// It collects the full name and optional profile picture only for a newly created account.
+class MotherRegistrationScreen extends StatefulWidget {
+  const MotherRegistrationScreen({super.key});
+
+  @override
+  State<MotherRegistrationScreen> createState() => _MotherRegistrationScreenState();
+}
+
+class _MotherRegistrationScreenState extends State<MotherRegistrationScreen> {
+  final nameController = TextEditingController();
+  final emailController = TextEditingController();
+  final passwordController = TextEditingController();
+  String? profileImageDataUrl;
+  String? profileImageName;
+  bool showPassword = false;
+  bool loading = false;
+
+  Future<void> chooseProfileImage() async {
+    final picked = await pickBrowserFile(accept: 'image/*');
+    if (!mounted || picked == null) return;
+    setState(() {
+      profileImageDataUrl = picked['dataUrl'];
+      profileImageName = picked['name'];
+    });
+  }
+
+  Future<void> createAccount() async {
+    final name = nameController.text.trim();
+    final email = emailController.text.trim();
+    final password = passwordController.text.trim();
+    if (name.isEmpty || email.isEmpty || password.length < 6) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('اكتب الاسم والإيميل والباسورد 6 أحرف على الأقل')),
+      );
+      return;
+    }
+    setState(() => loading = true);
+    try {
+      final credential = await FirebaseAuth.instance.createUserWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
+      await FirebaseFirestore.instance.collection('users').doc(credential.user!.uid).set({
+        'uid': credential.user!.uid,
+        'name': name,
+        'fullName': name,
+        'email': email,
+        'role': 'mother',
+        'profileImage': profileImageDataUrl,
+        'profileImageName': profileImageName,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+      if (!mounted) return;
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const MainNavigationScreen()),
+      );
+    } on FirebaseAuthException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message ?? 'Registration failed')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Registration error: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => loading = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    nameController.dispose();
+    emailController.dispose();
+    passwordController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: BabyBg(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 620),
+              child: Card(
+                elevation: 8,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+                child: Padding(
+                  padding: const EdgeInsets.all(26),
+                  child: Column(
+                    children: [
+                      backButton(context),
+                      dataCircleImage(
+                        dataUrl: profileImageDataUrl,
+                        fallbackAsset: babyImage,
+                        fallbackIcon: Icons.person,
+                        size: 112,
+                      ),
+                      const SizedBox(height: 12),
+                      const Text(
+                        'Create New Account',
+                        style: TextStyle(fontSize: 27, fontWeight: FontWeight.bold, color: darkText),
+                      ),
+                      const SizedBox(height: 6),
+                      const Text('Create your mother profile and add an optional personal photo.', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey, fontSize: 12)),
+                      const SizedBox(height: 20),
+                      TextField(controller: nameController, decoration: inputField('Full Name', Icons.person)),
+                      const SizedBox(height: 12),
+                      TextField(controller: emailController, decoration: inputField('Email', Icons.email)),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: passwordController,
+                        obscureText: !showPassword,
+                        onSubmitted: (_) => createAccount(),
+                        decoration: inputField('Password', Icons.lock_outline).copyWith(
+                          suffixIcon: IconButton(
+                            icon: Icon(showPassword ? Icons.visibility_off : Icons.visibility),
+                            onPressed: () => setState(() => showPassword = !showPassword),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      InkWell(
+                        onTap: loading ? null : chooseProfileImage,
+                        borderRadius: BorderRadius.circular(18),
+                        child: Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(13),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF6F8FC),
+                            borderRadius: BorderRadius.circular(18),
+                            border: Border.all(color: mainColor.withOpacity(.25)),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.photo_camera_outlined, color: mainColor),
+                              const SizedBox(width: 10),
+                              Expanded(child: Text(profileImageName ?? 'Choose Profile Picture (Optional)', style: const TextStyle(color: darkText, fontWeight: FontWeight.w600))),
+                              const Icon(Icons.upload_file, color: medicalBlue),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      loading ? const CircularProgressIndicator() : mainButton('Create Account', Icons.person_add_alt_1_rounded, createAccount),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+Future<Map<String, dynamic>> loadCurrentUserProfile() async {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return <String, dynamic>{};
+  final mother = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+  if (mother.exists) return mother.data() ?? <String, dynamic>{};
+  final doctor = await FirebaseFirestore.instance.collection('doctors').doc(user.uid).get();
+  return doctor.data() ?? <String, dynamic>{};
+}
+
+// ADDED: Shared profile badge for mothers and doctors after login.
+// It checks both Firestore collections and displays the saved full name and profile image.
+class UserProfileBadge extends StatelessWidget {
+  const UserProfileBadge({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return const SizedBox.shrink();
+    return FutureBuilder<Map<String, dynamic>>(
+      future: loadCurrentUserProfile(),
+      builder: (context, userSnapshot) {
+        final data = userSnapshot.data ?? <String, dynamic>{};
+        final name = data['name']?.toString().trim().isNotEmpty == true
+            ? data['name'].toString()
+            : (user.displayName ?? user.email ?? 'Mother');
+        final image = data['profileImage']?.toString();
+        return Container(
+          width: double.infinity,
+          margin: const EdgeInsets.only(bottom: 14),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(.72),
+            borderRadius: BorderRadius.circular(19),
+            border: Border.all(color: mainColor.withOpacity(.16)),
+          ),
+          child: Row(
+            children: [
+              dataCircleImage(
+                dataUrl: image,
+                fallbackAsset: babyImage,
+                fallbackIcon: Icons.person,
+                size: 43,
+              ),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('My Profile', style: TextStyle(color: Colors.grey, fontSize: 9)),
+                    Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: darkText, fontSize: 11.5, fontWeight: FontWeight.bold)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
 /* ===================== MAIN NAVIGATION ===================== */
 
+// UPDATED: The original post-login navigation now also exposes the signed-in user's profile image and name.
 class MainNavigationScreen extends StatefulWidget {
   const MainNavigationScreen({super.key});
 
@@ -2533,6 +2929,7 @@ class _MainNavigationScreenState
                 ),
               ),
               const SizedBox(height: 20),
+              const UserProfileBadge(),
 
               sidebarItem(
                 icon: Icons.home_rounded,
@@ -7760,8 +8157,9 @@ class DoctorProfileScreen extends StatelessWidget {
           child: Column(
             children: [
               backButton(context),
-              networkCircleImage(
-                url: doctorImage,
+              dataCircleImage(
+                dataUrl: doctorData['profileImage']?.toString(),
+                fallbackAsset: doctorImage,
                 fallbackIcon: Icons.medical_services,
                 size: 125,
               ),
@@ -7854,6 +8252,8 @@ class DoctorProfileScreen extends StatelessWidget {
 /* ===================== PRIVATE REAL-TIME CHAT ===================== */
 
 
+// UPDATED: The chat role is resolved automatically from the authenticated Firebase account.
+// New messages also store the sender full name and profile image for the conversation UI.
 class ConversationsScreen extends StatelessWidget {
   final String role;
 
@@ -8170,10 +8570,34 @@ class PrivateChatScreen extends StatefulWidget {
 class _PrivateChatScreenState extends State<PrivateChatScreen> {
   final TextEditingController messageController = TextEditingController();
 
-  // Presentation role selector for the shared mother-doctor conversation.
-  // Firebase still stores the authenticated sender ID.
+  // The role is derived from the authenticated Firebase account.
+  // ADDED: UI role label is derived from the signed-in Firebase account, not selected manually.
   String activeChatRole = 'mother';
+  String activeUserName = 'Mother';
   bool isTyping = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCurrentIdentity();
+  }
+
+  Future<void> _loadCurrentIdentity() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    final role = await currentRole();
+    String name = user.displayName ?? '';
+    final collection = role == 'doctor' ? 'doctors' : 'users';
+    final snap = await FirebaseFirestore.instance.collection(collection).doc(user.uid).get();
+    final data = snap.data();
+    final stored = data?['name']?.toString().trim() ?? '';
+    if (stored.isNotEmpty) name = stored;
+    if (!mounted) return;
+    setState(() {
+      activeChatRole = role;
+      activeUserName = name.isNotEmpty ? name : (role == 'doctor' ? 'Doctor' : 'Mother');
+    });
+  }
 
   Future<String> currentRole() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -8200,13 +8624,31 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       return;
     }
 
+    final role = await currentRole();
+    final collection = role == 'doctor' ? 'doctors' : 'users';
+    final profile = await FirebaseFirestore.instance.collection(collection).doc(user.uid).get();
+    final profileData = profile.data() ?? <String, dynamic>{};
+    final profileName = profileData['name']?.toString().trim() ?? '';
+    final senderImage = profileData['profileImage']?.toString();
+    final senderName = profileName.isNotEmpty
+        ? profileName
+        : (role == 'doctor' ? 'Doctor' : 'Mother');
+    if (mounted) {
+      setState(() {
+        activeChatRole = role;
+        activeUserName = senderName;
+      });
+    }
     final roomRef =
         FirebaseFirestore.instance.collection('chat_rooms').doc(widget.roomId);
 
     await roomRef.collection('messages').add({
       'senderId': user.uid,
       'senderEmail': user.email ?? '',
-      'senderRole': activeChatRole,
+      'senderRole': role,
+      'senderName': senderName,
+      // ADDED: Keep the sender identity with the message so old/new chat bubbles can show it.
+      'senderImage': senderImage,
       'message': text,
       'createdAt': FieldValue.serverTimestamp(),
     });
@@ -8288,14 +8730,25 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
             ),
           ],
         ),
-        child: Column(
-          crossAxisAlignment:
-              CrossAxisAlignment.start,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
           children: [
+            dataCircleImage(
+              dataUrl: msg['senderImage']?.toString(),
+              fallbackAsset: isDoctorMessage ? doctorImage : babyImage,
+              fallbackIcon: isDoctorMessage ? Icons.medical_services : Icons.person,
+              size: 32,
+            ),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
             Text(
-              isDoctorMessage
-                  ? 'Doctor'
-                  : 'Mother',
+              msg['senderName']?.toString().trim().isNotEmpty == true
+                  ? msg['senderName'].toString()
+                  : (isDoctorMessage ? 'Doctor' : 'Mother'),
               style: TextStyle(
                 fontWeight: FontWeight.bold,
                 fontSize: 10,
@@ -8339,6 +8792,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                   ),
                 ],
               ],
+            ),
+                ],
+              ),
             ),
           ],
         ),
@@ -8636,55 +9092,37 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                       ),
                     ),
 
-                    // role selector compact
                     Padding(
-                      padding: const EdgeInsets.fromLTRB(
-                        16,
-                        4,
-                        16,
-                        7,
-                      ),
+                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 7),
                       child: Row(
                         children: [
-                          Text(
-                            "Reply as",
-                            style: TextStyle(
-                              color: dark
-                                  ? Colors.white54
-                                  : Colors.grey,
-                              fontSize: 8.5,
-                            ),
+                          Icon(
+                            activeChatRole == 'doctor'
+                                ? Icons.medical_services_rounded
+                                : Icons.person_rounded,
+                            size: 16,
+                            color: activeChatRole == 'doctor' ? medicalBlue : mainColor,
                           ),
                           const SizedBox(width: 7),
-                          ChoiceChip(
-                            label: const Text("Mother"),
-                            selected:
-                                activeChatRole == 'mother',
-                            onSelected: (_) {
-                              setState(
-                                () =>
-                                    activeChatRole = 'mother',
-                              );
-                            },
-                            avatar: const Icon(
-                              Icons.person_rounded,
-                              size: 15,
+                          Text(
+                            activeChatRole == 'doctor'
+                                ? 'Writing as Doctor'
+                                : 'Writing as Mother',
+                            style: TextStyle(
+                              color: dark ? Colors.white70 : darkText,
+                              fontSize: 9.5,
+                              fontWeight: FontWeight.w700,
                             ),
                           ),
                           const SizedBox(width: 6),
-                          ChoiceChip(
-                            label: const Text("Doctor"),
-                            selected:
-                                activeChatRole == 'doctor',
-                            onSelected: (_) {
-                              setState(
-                                () =>
-                                    activeChatRole = 'doctor',
-                              );
-                            },
-                            avatar: const Icon(
-                              Icons.medical_services_rounded,
-                              size: 15,
+                          Expanded(
+                            child: Text(
+                              activeUserName,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: dark ? Colors.white54 : Colors.grey,
+                                fontSize: 9,
+                              ),
                             ),
                           ),
                         ],
@@ -11858,6 +12296,8 @@ class DoctorGatewayScreen extends StatelessWidget {
 
 /* ===================== DOCTOR REGISTER SCREEN ===================== */
 
+// UPDATED: Doctor registration saves the full application data, certificate metadata,
+// certificate preview data, and the optional compressed profile image for admin review.
 class DoctorRegisterScreen extends StatefulWidget {
   const DoctorRegisterScreen({super.key});
 
@@ -11866,13 +12306,38 @@ class DoctorRegisterScreen extends StatefulWidget {
 }
 
 class _DoctorRegisterScreenState extends State<DoctorRegisterScreen> {
+  bool showPassword = false;
   final nameController = TextEditingController();
   final emailController = TextEditingController();
   final passwordController = TextEditingController();
   final specializationController = TextEditingController();
   final licenseController = TextEditingController();
   final experienceController = TextEditingController();
+  String? doctorProfileImageDataUrl;
+  String? doctorProfileImageName;
+  String? certificateFileDataUrl;
+  String? certificateFileName;
   bool loading = false;
+
+  Future<void> chooseDoctorProfileImage() async {
+    final picked = await pickBrowserFile(accept: 'image/*');
+    if (!mounted || picked == null) return;
+    setState(() {
+      doctorProfileImageDataUrl = picked['dataUrl'];
+      doctorProfileImageName = picked['name'];
+    });
+  }
+
+  Future<void> chooseCertificateFile() async {
+    final picked = await pickBrowserFile(
+      accept: '.pdf,.doc,.docx,image/*',
+    );
+    if (!mounted || picked == null) return;
+    setState(() {
+      certificateFileDataUrl = picked['dataUrl'];
+      certificateFileName = picked['name'];
+    });
+  }
 
   Future<void> submitDoctor() async {
     final name = nameController.text.trim();
@@ -11912,7 +12377,10 @@ class _DoctorRegisterScreenState extends State<DoctorRegisterScreen> {
         'specialization': specialization,
         'licenseId': license,
         'experience': experience,
-        'certificate': 'Uploaded',
+        'certificate': certificateFileName ?? 'Uploaded',
+        'certificateFile': certificateFileDataUrl,
+        'profileImage': doctorProfileImageDataUrl,
+        'profileImageName': doctorProfileImageName,
         'approved': false,
         'createdAt': FieldValue.serverTimestamp(),
       });
@@ -11954,25 +12422,67 @@ class _DoctorRegisterScreenState extends State<DoctorRegisterScreen> {
   }
 
   Widget uploadCertificateBox() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: mainColor.withOpacity(.3)),
-      ),
-      child: const Row(
-        children: [
-          Icon(Icons.upload_file, color: mainColor),
-          SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              "Upload Certificate / Graduation Proof",
-              style: TextStyle(fontWeight: FontWeight.bold),
+    return InkWell(
+      onTap: loading ? null : chooseCertificateFile,
+      borderRadius: BorderRadius.circular(18),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: mainColor.withOpacity(.3)),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.upload_file, color: mainColor),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                certificateFileName ?? 'Upload Certificate / Graduation Proof',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
-          ),
-          Text("Choose File", style: TextStyle(color: medicalBlue)),
-        ],
+            const Text('Choose File', style: TextStyle(color: medicalBlue)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget doctorProfilePicker() {
+    return InkWell(
+      onTap: loading ? null : chooseDoctorProfileImage,
+      borderRadius: BorderRadius.circular(18),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF6F8FC),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: mainColor.withOpacity(.25)),
+        ),
+        child: Row(
+          children: [
+            dataCircleImage(
+              dataUrl: doctorProfileImageDataUrl,
+              fallbackAsset: doctorImage,
+              fallbackIcon: Icons.medical_services,
+              size: 54,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                doctorProfileImageName ?? 'Add Doctor Profile Picture (Optional)',
+                style: const TextStyle(
+                  color: darkText,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            const Icon(Icons.photo_camera_outlined, color: mainColor),
+          ],
+        ),
       ),
     );
   }
@@ -11993,11 +12503,14 @@ class _DoctorRegisterScreenState extends State<DoctorRegisterScreen> {
               child: Column(
                 children: [
                   backButton(context),
-                  networkCircleImage(
-                    url: doctorImage,
+                  dataCircleImage(
+                    dataUrl: doctorProfileImageDataUrl,
+                    fallbackAsset: doctorImage,
                     fallbackIcon: Icons.medical_services,
                     size: 115,
                   ),
+                  const SizedBox(height: 8),
+                  doctorProfilePicker(),
                   const SizedBox(height: 15),
                   const Text(
                     "Doctor Registration",
@@ -12020,8 +12533,14 @@ class _DoctorRegisterScreenState extends State<DoctorRegisterScreen> {
                   const SizedBox(height: 12),
                   TextField(
                     controller: passwordController,
-                    obscureText: true,
-                    decoration: inputField("Password", Icons.lock_outline),
+                    obscureText: !showPassword,
+                    onSubmitted: (_) => submitDoctor(),
+                    decoration: inputField("Password", Icons.lock_outline).copyWith(
+                      suffixIcon: IconButton(
+                        icon: Icon(showPassword ? Icons.visibility_off : Icons.visibility),
+                        onPressed: () => setState(() => showPassword = !showPassword),
+                      ),
+                    ),
                   ),
                   const SizedBox(height: 12),
                   TextField(
@@ -12187,6 +12706,31 @@ class AdminScreen extends StatelessWidget {
     );
   }
 
+  // ADDED: Reusable row for displaying each doctor-application field in the admin details view.
+  Widget _detailLine(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              color: medicalBlue,
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            value,
+            style: const TextStyle(color: darkText, fontSize: 13),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget requestCard(
     BuildContext context,
     QueryDocumentSnapshot doctor,
@@ -12202,6 +12746,65 @@ class AdminScreen extends StatelessWidget {
 
     final specialization =
         data['specialization']?.toString() ?? 'Not specified';
+    final email = data['email']?.toString() ?? 'Not provided';
+    final experience = data['experience']?.toString() ?? 'Not provided';
+    final certificate = data['certificate']?.toString() ?? 'Not uploaded';
+    // ADDED: Read the uploaded certificate data so the admin can preview the actual file.
+    final certificateFile = data['certificateFile']?.toString();
+
+    Future<void> openCertificate() async {
+      if (certificateFile == null || certificateFile.isEmpty) {
+        return;
+      }
+      html.window.open(certificateFile, '_blank');
+    }
+
+    Future<void> showDoctorDetails() async {
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) {
+          return AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(24),
+            ),
+            title: const Row(
+              children: [
+                Icon(Icons.medical_information_rounded, color: medicalBlue),
+                SizedBox(width: 9),
+                Expanded(child: Text('Doctor Application Details')),
+              ],
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _detailLine('Name', name),
+                  _detailLine('Email', email),
+                  _detailLine('Specialization', specialization),
+                  _detailLine('Years of Experience', experience),
+                  _detailLine('Medical License ID', license),
+                  _detailLine('Certificate', certificate),
+                  _detailLine('Application Status', 'Pending approval'),
+                ],
+              ),
+            ),
+            actions: [
+              if (certificateFile != null && certificateFile.isNotEmpty)
+                OutlinedButton.icon(
+                  onPressed: openCertificate,
+                  icon: const Icon(Icons.open_in_new_rounded, size: 17),
+                  label: const Text('Open Certificate'),
+                ),
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Close'),
+              ),
+            ],
+          );
+        },
+      );
+    }
+
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -12289,6 +12892,22 @@ class AdminScreen extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 13),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: showDoctorDetails,
+              icon: const Icon(Icons.visibility_rounded, size: 18),
+              label: const Text('View Full Doctor Details'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: medicalBlue,
+                side: const BorderSide(color: medicalBlue),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 9),
           Row(
             children: [
               Expanded(
@@ -13283,6 +13902,8 @@ class DoctorDashboardScreen extends StatelessWidget {
                         ),
                       ],
                     ),
+                    const SizedBox(height: 10),
+                    const UserProfileBadge(),
                     const SizedBox(height: 17),
 
                     LayoutBuilder(
